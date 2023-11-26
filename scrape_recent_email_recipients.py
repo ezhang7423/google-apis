@@ -1,14 +1,76 @@
 import os.path
+import re
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from datetime import datetime, timedelta
+from rich import print
 
 # If modifying these scopes, delete the file token.json.
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
 
+
+def extract_name_email(recipient):
+    # Regular expression to extract name and email from the recipient string
+    pattern = r'(?:"?([^"]*)"?\s)?(?:<?(.+?@[^>,]+)>?)'
+    matches = re.finditer(pattern, recipient)
+    extracted_recipients = []  # A list to contain tuples of (name, email) pairs
+
+    for match in matches:
+        name = match.group(1)
+        email = match.group(2)
+
+        # Some cleanup to remove enclosing quotes if present
+        if name:
+            name = name.strip('"')
+
+        extracted_recipients.append((name, email))
+
+    return extracted_recipients
+
+def get_recent_email_recipients(service, save_to_folder=True):
+    response = service.users().messages().list(userId='me', q='in:sent').execute()
+    messages = response.get('messages', [])
+    recipients = set()
+
+    for message in messages:
+        msg_id = message['id']
+        message_detail = service.users().messages().get(userId='me', id=msg_id).execute()
+        headers = message_detail.get('payload', {}).get('headers', [])
+        for header in headers:
+            if header.get('name') == 'To':
+                recipient_list = extract_name_email(header.get('value'))
+                for name, email in recipient_list:
+                    formatted_name = name if name else email.split('@')[0].replace('.', '_').replace(' ', '_')
+                    recipients.add((formatted_name, email))
+
+    print(recipients)
+    
+    # TODO clean this data  better. maybe we use gpt here...
+
+    
+    # recipients = set()
+    # for name in rl:
+    #     recipient_list = extract_name_email(name)
+    #     for name, email in recipient_list:
+    #         formatted_name = name if name else email.split('@')[0].replace('.', '_').replace(' ', '_')
+    #         recipients.add((formatted_name, email))
+    # print(recipients)
+    if save_to_folder:
+        folder_name = "recipients"
+        os.makedirs(folder_name, exist_ok=True)
+
+        for name, email in recipients:
+            email_extension = email.split('@')[-1]
+            file_name = f"{name}.md"
+
+            with open(os.path.join(folder_name, file_name), 'w') as file:
+                file.write(f'#{email_extension}\n')
+
+    return recipients
 
 def main():
   """Shows basic usage of the Gmail API.
@@ -34,17 +96,9 @@ def main():
       token.write(creds.to_json())
 
   try:
-    # Call the Gmail API
     service = build("gmail", "v1", credentials=creds)
-    results = service.users().labels().list(userId="me").execute()
-    labels = results.get("labels", [])
-
-    if not labels:
-      print("No labels found.")
-      return
-    print("Labels:")
-    for label in labels:
-      print(label["name"])
+    get_recent_email_recipients(service)    
+    
 
   except HttpError as error:
     # TODO(developer) - Handle errors from gmail API.
@@ -53,41 +107,3 @@ def main():
 
 if __name__ == "__main__":
   main()
-  
-# from googleapiclient.discovery import build
-# from google.oauth2.credentials import Credentials
-# from datetime import datetime, timedelta
-
-# # Load your credentials (probably from a file or a database)
-# # These credentials should be generated through the OAuth 2.0 flow.
-# credentials = Credentials.from_authorized_user_file('credentials.json')
-
-# # Build the Gmail service
-# service = build('gmail', 'v1', credentials=credentials)
-
-# # Calculate the date one month ago in RFC 3339 format
-# one_month_ago = datetime.now() - timedelta(days=30)
-# one_month_ago_rfc3339 = one_month_ago.isoformat() + 'Z'  # 'Z' indicates UTC time
-
-# # List messages sent in the last month
-# response = service.users().messages().list(
-#     userId='me',
-#     q='in:sent after:{}'.format(one_month_ago_rfc3339)
-# ).execute()
-
-# # Retrieve a list of Message IDs from the response
-# messages = response.get('messages', [])
-
-# # Extract recipients from these messages
-# recipients = set()
-# for message in messages:
-#     msg_id = message['id']
-#     message_detail = service.users().messages().get(userId='me', id=msg_id).execute()
-#     headers = message_detail.get('payload', {}).get('headers', [])
-#     for header in headers:
-#         if header.get('name') == 'To':
-#             recipient = header.get('value')
-#             recipients.add(recipient)
-
-# # Now `recipients` has all the unique email addresses you sent emails to in the last month.
-# print(recipients)
